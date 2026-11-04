@@ -84,6 +84,22 @@ versus 827 ms for the original padded expert dispatch. Batch 8 took about 284
 ms per step, making batch 1 per GPU a practical starting point for an 8-GPU
 run with gradient accumulation.
 
+For a matched 8-GPU-style microbatch, use `--batch 8`. A representative GB300
+run (`--warmup 5 --steps 10`, sequence length 4096) measured 282 ms for grouped
+dispatch and 1148 ms for padded dispatch (4.07x). To keep a GQA comparison near
+the same parameter count, use 29 experts with two KV heads:
+
+```bash
+CUDA_VISIBLE_DEVICES=1 uv run python benchmarks/lol_step_baseline.py \
+  --mode grouped --batch 8 --sequence-length 4096 \
+  --kv-heads 2 --experts 29
+```
+
+That configuration is 603.1M parameters and measured 273 ms per step on the
+same GB300 run, about 1.05x faster than the 592.9M MHA configuration. A GQA
+run with the original 24 experts is only 516.2M parameters, so its larger
+speedup is not a fair 600M comparison.
+
 To compare attention head layouts on the packed 128-token windows, run:
 
 ```bash
@@ -95,6 +111,11 @@ path. Virtual Head Attention (VHA) has lower physical QKV width, but its
 Premix and Postmix must be fused or folded into projections; naive runtime
 mixing can erase the gain. Neither changes the virtual-head SDPA interaction
 count, so they cannot provide a 2x end-to-end training speedup by themselves.
+On the packed attention workload, the current GB300 measurements were 3.58 ms
+for MHA, 2.58 ms for GQA-2, and 4.56 ms for runtime VHA. VHA without the
+runtime Postmix was 3.00 ms; this is a useful lower bound, not a train-time
+configuration. The paper's Premix/Postmix folding is therefore the appropriate
+inference optimization, while GQA is the useful train-time choice.
 The model accepts `model.n_kv_head`; leave it `null` for the original MHA
 checkpoint layout, or set (for example) `2` when training a new GQA model.
 
