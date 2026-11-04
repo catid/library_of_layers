@@ -10,8 +10,38 @@ from .config import validate_paper_normalization
 
 
 # Eager FlexAttention materializes the score matrix. One dynamic compiled
-# kernel handles the variable packed lengths used by routed experts.
-flex_attention = torch.compile(flex_attention, dynamic=True)
+# kernel handles the variable packed lengths used by routed experts.  PyTorch's
+# FlexAttention backend currently requires CUDA, so keep a dense SDPA fallback
+# for CPU smoke tests and development environments without a working driver.
+_compiled_flex_attention = torch.compile(flex_attention, dynamic=True)
+
+
+def _run_flex_attention(query, key, value, *, block_mask):
+    if query.device.type != "cpu":
+        return _compiled_flex_attention(
+            query, key, value, block_mask=block_mask
+        )
+
+    batch_size, n_heads, query_length, _ = query.shape
+    key_length = key.shape[-2]
+    query_positions = torch.arange(
+        query_length, device=query.device, dtype=torch.long
+    ).view(1, 1, query_length, 1)
+    key_positions = torch.arange(
+        key_length, device=query.device, dtype=torch.long
+    ).view(1, 1, 1, key_length)
+    batch = torch.arange(
+        batch_size, device=query.device, dtype=torch.long
+    ).view(batch_size, 1, 1, 1)
+    head = torch.arange(
+        n_heads, device=query.device, dtype=torch.long
+    ).view(1, n_heads, 1, 1)
+    allowed = block_mask.mask_mod(
+        batch, head, query_positions, key_positions
+    )
+    return F.scaled_dot_product_attention(
+        query, key, value, attn_mask=allowed
+    )
 
 
 def _grouped_mm(inputs, weights, offsets):
@@ -136,7 +166,7 @@ class CausalSelfAttentionNeo(nn.Module):
                 query, key, value, is_causal=True
             )
         else:
-            output = flex_attention(
+            output = _run_flex_attention(
                 query, key, value, block_mask=block_mask
             )
         output = output.transpose(1, 2).contiguous().view(
