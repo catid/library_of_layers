@@ -93,14 +93,15 @@ def _run(mode, args):
         v = F.linear(x, weights[2]).view(
             args.windows, args.window, kv_heads, head_dim,
         )
-        q = _rms_norm(q)
-        k = _rms_norm(k)
         if mode == "vha":
             # Each physical query head is premixed independently for every
-            # KV group, then the virtual heads are flattened for SDPA.
+            # KV group, before QK normalization and RoPE as in the paper. The
+            # virtual heads are then flattened for SDPA.
             q = torch.einsum("nwgd,kgde->nwkge", q, premix).reshape(
                 args.windows, args.window, heads, head_dim,
             )
+        q = _rms_norm(q)
+        k = _rms_norm(k)
         q = q.transpose(1, 2)
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
