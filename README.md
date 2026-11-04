@@ -84,9 +84,9 @@ is therefore a practical starting point for an 8-GPU run with gradient
 accumulation.
 
 For a matched 8-GPU-style microbatch, use `--batch 8`. A clean GB300 run
-(`--warmup 5 --steps 10`, sequence length 4096) measured **273.4 ms** for
-grouped MHA dispatch and **1139.8 ms** for the original padded dispatch
-(**4.17x**). The grouped path processes about 120k tokens/s at this batch size.
+(`--warmup 5 --steps 10`, sequence length 4096) measured **272.7 ms** for
+grouped MHA dispatch and **1081.4 ms** for the original padded dispatch
+(**3.97x**). The grouped path processes about 120k tokens/s at this batch size.
 To keep a GQA comparison near the same parameter count, use 29 experts with
 two KV heads:
 
@@ -96,8 +96,8 @@ CUDA_VISIBLE_DEVICES=1 uv run python benchmarks/lol_step_baseline.py \
   --kv-heads 2 --experts 29
 ```
 
-That configuration is 603.1M parameters and measured about **260 ms** per step
-on the same GB300, about **1.05x** faster than the 592.9M MHA configuration. A GQA
+That configuration is 603.1M parameters and measured **262.6 ms** per step on
+the same GB300, about **1.04x** faster than the 592.9M MHA configuration. A GQA
 run with the original 24 experts is only 516.2M parameters, so its larger
 speedup is not a fair 600M comparison.
 With one KV head and 29 experts, the model is 598.0M parameters and measured
@@ -153,7 +153,7 @@ CUDA_VISIBLE_DEVICES=1 uv run python benchmarks/lol_step_baseline.py \
 ```
 
 On the GB300, a clean B8/S4096 run took 184.5 ms with only the final four
-depths differentiated, versus 273.4 ms for full-depth grouped MHA (1.48x).
+depths differentiated, versus 272.7 ms for full-depth grouped MHA (1.48x).
 This changes the gradient approximation and should be treated as a training
 schedule choice. Executing only eight of the 24 recurrent depths gives 129.4
 ms (2.11x), but changes the forward depth and therefore the model computation.
