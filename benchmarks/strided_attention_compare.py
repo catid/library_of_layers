@@ -71,7 +71,6 @@ def _run(mode, args):
     premix = None
     postmix_a = postmix_b = None
     if mode == "vha":
-        groups = heads // 2 // kv_heads
         premix = torch.eye(head_dim, device=device, dtype=dtype).expand(
             kv_heads, physical_q_heads, head_dim, head_dim,
         ).clone()
@@ -84,9 +83,6 @@ def _run(mode, args):
             )
             postmix_b = torch.zeros_like(postmix_a, requires_grad=True)
             parameters.extend((postmix_a, postmix_b))
-    else:
-        groups = 1
-
     def step():
         q = F.linear(x, weights[0]).view(
             args.windows, args.window, physical_q_heads, head_dim,
