@@ -123,6 +123,13 @@ class LoLWindow(VanillaGPTNeo):
             self.depth_expert_film_beta[int(depth)],
         )
 
+    @staticmethod
+    def _metadata_at_depth(context, depth):
+        cached = context.window_metadata
+        if cached is not None and int(depth) < len(cached):
+            return cached[int(depth)]
+        return None
+
     def _build_middle(self, config):
         middle_config = (
             config
@@ -598,10 +605,12 @@ class LoLWindow(VanillaGPTNeo):
                 track_gradients = gradient_bearing or mixed_backprop
                 if depth == no_grad_depth and self.grouped_window_dispatch:
                     self._grouped_no_grad_weight_cache = None
-                metadata = self.attention_strategy.metadata(
-                    context.doc_id, context.position_ids, depth,
-                    input_valid=context.input_valid,
-                )
+                metadata = self._metadata_at_depth(context, depth)
+                if metadata is None:
+                    metadata = self.attention_strategy.metadata(
+                        context.doc_id, context.position_ids, depth,
+                        input_valid=context.input_valid,
+                    )
                 first_tokens = (
                     metadata.is_first_window_of_doc[
                         metadata.global_window_id
@@ -758,10 +767,12 @@ class LoLWindow(VanillaGPTNeo):
         traces = []
         for depth in range(self.recurrent_depth):
             x = self._inject_recurrent_input(x, prepared_input)
-            metadata = self.attention_strategy.metadata(
-                context.doc_id, context.position_ids, depth,
-                input_valid=context.input_valid,
-            )
+            metadata = self._metadata_at_depth(context, depth)
+            if metadata is None:
+                metadata = self.attention_strategy.metadata(
+                    context.doc_id, context.position_ids, depth,
+                    input_valid=context.input_valid,
+                )
             decision = self._route_at_depth(
                 x,
                 metadata,
@@ -997,10 +1008,12 @@ class LoLWindow(VanillaGPTNeo):
         )
         for depth in range(depth_limit):
             hidden = self._inject_recurrent_input(hidden, prepared)
-            metadata = self.attention_strategy.metadata(
-                context.doc_id, context.position_ids, depth,
-                input_valid=context.input_valid,
-            )
+            metadata = self._metadata_at_depth(context, depth)
+            if metadata is None:
+                metadata = self.attention_strategy.metadata(
+                    context.doc_id, context.position_ids, depth,
+                    input_valid=context.input_valid,
+                )
             window_in_doc = self._win_in_doc_idx(
                 metadata.is_first_window_of_doc,
                 metadata.n_windows_total,

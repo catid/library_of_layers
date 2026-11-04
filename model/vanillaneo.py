@@ -60,6 +60,10 @@ class ForwardContext:
     block_mask: object
     local_block_mask: object | None = None
     input_valid: torch.Tensor | None = None
+    # LoL's shifted windows depend only on document/position metadata and
+    # depth, never on the hidden state. Cache them once so recurrent dispatch
+    # does not rebuild cumsum/nonzero/bincount layouts at every step.
+    window_metadata: tuple[object, ...] | None = None
 
 
 @dataclass
@@ -183,6 +187,15 @@ class VanillaGPTNeo(nn.Module):
                 doc_id, hidden_key=hidden_key
             )
         )
+        window_metadata = None
+        if self._attention_architecture() == "lol_dynamic_window":
+            window_metadata = tuple(
+                self.attention_strategy.metadata(
+                    doc_id, position_ids, depth,
+                    input_valid=input_valid,
+                )
+                for depth in range(int(self.config.recurrent_depth))
+            )
         return ForwardContext(
             idx=idx,
             doc_id=doc_id,
@@ -190,6 +203,7 @@ class VanillaGPTNeo(nn.Module):
             block_mask=block_mask,
             local_block_mask=local_block_mask,
             input_valid=input_valid,
+            window_metadata=window_metadata,
         )
 
     def _block_mask_for_layer(self, context):
