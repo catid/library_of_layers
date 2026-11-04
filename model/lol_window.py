@@ -221,9 +221,16 @@ class LoLWindow(VanillaGPTNeo):
             return values
 
         def stack_linear(getter):
-            return torch.stack(selected(getter)).transpose(
-                1, 2
-            ).contiguous().to(dtype)
+            # Cast each source matrix before stacking.  The previous order
+            # materialized a full fp32 stack and a second contiguous fp32
+            # transpose before allocating the bf16 result.  In the 24-expert
+            # 600M model that transiently writes several hundred MiB per
+            # projection on every forward.  Per-expert casts preserve the
+            # autograd edge to each original parameter while keeping the
+            # packed/transposed intermediates in the compute dtype.
+            return torch.stack(
+                [value.to(dtype) for value in selected(getter)]
+            ).transpose(1, 2).contiguous()
 
         def stack_norm(getter):
             return torch.stack(selected(getter))
