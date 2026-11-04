@@ -18,6 +18,7 @@ import time
 
 import torch
 from torch.nn import functional as F
+from torch.nn.attention import SDPBackend, sdpa_kernel
 
 
 def _parser():
@@ -42,6 +43,12 @@ def _parser():
     parser.add_argument(
         "--explicit-gqa", action="store_true",
         help="Repeat K/V heads before SDPA (the dynamic grouped-model path).",
+    )
+    parser.add_argument(
+        "--sdpa-backend",
+        choices=("default", "flash", "efficient", "cudnn", "math"),
+        default="default",
+        help="Select a fixed SDPA backend; default lets PyTorch choose.",
     )
     return parser
 
@@ -124,9 +131,22 @@ def _run(mode, args):
             repeat = heads // kv_heads
             k = k.repeat_interleave(repeat, dim=1)
             v = v.repeat_interleave(repeat, dim=1)
-        y = F.scaled_dot_product_attention(
-            q, k, v, is_causal=True, enable_gqa=use_native_gqa,
-        ).transpose(1, 2)
+        if args.sdpa_backend == "default":
+            y = F.scaled_dot_product_attention(
+                q, k, v, is_causal=True, enable_gqa=use_native_gqa,
+            )
+        else:
+            backend = {
+                "flash": SDPBackend.FLASH_ATTENTION,
+                "efficient": SDPBackend.EFFICIENT_ATTENTION,
+                "cudnn": SDPBackend.CUDNN_ATTENTION,
+                "math": SDPBackend.MATH,
+            }[args.sdpa_backend]
+            with sdpa_kernel(backend):
+                y = F.scaled_dot_product_attention(
+                    q, k, v, is_causal=True, enable_gqa=use_native_gqa,
+                )
+        y = y.transpose(1, 2)
         if mode == "vha" and args.postmix == "runtime":
             mixed = torch.einsum("nwhd,hr->nwrd", y, postmix_a)
             y = y + torch.einsum("nwrd,hr->nwhd", mixed, postmix_b)
@@ -170,6 +190,26 @@ def main():
     args = _parser().parse_args()
     if not torch.cuda.is_available():
         raise SystemExit("CUDA is required; select one GPU, e.g. CUDA_VISIBLE_DEVICES=1")
+    if args.sdpa_backend != "default":
+        selected = {
+            "flash": SDPBackend.FLASH_ATTENTION,
+            "efficient": SDPBackend.EFFICIENT_ATTENTION,
+            "cudnn": SDPBackend.CUDNN_ATTENTION,
+            "math": SDPBackend.MATH,
+        }[args.sdpa_backend]
+        # Fixed-shape compilation captures this setting cleanly. The
+        # dynamically routed model keeps the default selection because
+        # backend guards and changing packed shapes add graph breaks there.
+        torch.backends.cuda.enable_flash_sdp(
+            selected is SDPBackend.FLASH_ATTENTION
+        )
+        torch.backends.cuda.enable_mem_efficient_sdp(
+            selected is SDPBackend.EFFICIENT_ATTENTION
+        )
+        torch.backends.cuda.enable_cudnn_sdp(
+            selected is SDPBackend.CUDNN_ATTENTION
+        )
+        torch.backends.cuda.enable_math_sdp(selected is SDPBackend.MATH)
     torch.set_float32_matmul_precision("high")
     modes = ("mha", "gqa", "vha") if args.mode == "all" else (args.mode,)
     _run.mha_median = None

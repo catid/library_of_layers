@@ -122,6 +122,20 @@ forward/backward step (2.17x). It is a kernel benchmark optimization; applying
 the compiled function inside the dynamically routed full model adds graph-call
 overhead and does not improve the end-to-end step.
 
+For this fixed shape, selecting the backend explicitly gives another isolated
+kernel improvement:
+
+```bash
+CUDA_VISIBLE_DEVICES=1 uv run python benchmarks/strided_attention_compare.py \
+  --mode mha --compile --sdpa-backend efficient --warmup 8 --steps 30
+```
+
+The GB300 measurement was **1.35 ms** for MHA, versus **1.64 ms** with the
+default backend. Explicit Flash was **1.41 ms**. Native GQA-2 with explicit
+Flash was **1.35 ms**. These settings are exposed for the fixed-shape kernel
+benchmark; forcing them inside dynamic routed dispatch caused graph breaks and
+was slower, so the production model keeps PyTorch's default backend choice.
+
 Combining compilation with one KV head gives a second combined speedup: the
 same workload measured 2.51 ms eager and 1.45 ms compiled for GQA-1, or 2.46x
 relative to the original 3.58 ms MHA kernel. GQA-2 remains the safer quality/
