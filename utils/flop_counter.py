@@ -112,12 +112,15 @@ def _attention_only_block(
 
     width = int(cfg.model.n_embd)
     heads = int(cfg.model.n_head)
+    kv_heads = int(getattr(cfg.model, "n_kv_head", heads) or heads)
     head_dim = width // heads
     norm = _norm_forward if forward_only else _norm
     linear = _linear_forward if forward_only else _linear
     attention = _attention_forward if forward_only else _attention
     total = norm(rows, width)
-    total += linear(rows, width, 3 * width, bias=False)
+    total += linear(
+        rows, width, (heads + 2 * kv_heads) * head_dim, bias=False
+    )
     total += 2 * norm(rows * heads, head_dim)
     total += (6 if forward_only else 12) * rows * width
     total += attention(rows, heads, head_dim, causal_pairs)

@@ -32,6 +32,10 @@ def _parser():
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--steps", type=int, default=5)
     parser.add_argument("--no-compile", action="store_true")
+    parser.add_argument(
+        "--kv-heads", type=int, default=None,
+        help="Train a GQA variant with this many KV heads; null keeps MHA.",
+    )
     return parser
 
 
@@ -41,6 +45,7 @@ def _run(mode, args):
         routed=True,
         attention_strategy="shifted_window",
         n_head=20,
+        n_kv_head=args.kv_heads,
         n_embd=1280,
         n_experts=24,
         window=128,

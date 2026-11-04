@@ -95,6 +95,8 @@ path. Virtual Head Attention (VHA) has lower physical QKV width, but its
 Premix and Postmix must be fused or folded into projections; naive runtime
 mixing can erase the gain. Neither changes the virtual-head SDPA interaction
 count, so they cannot provide a 2x end-to-end training speedup by themselves.
+The model accepts `model.n_kv_head`; leave it `null` for the original MHA
+checkpoint layout, or set (for example) `2` when training a new GQA model.
 
 ## Plotting
 Copy [the manifest template](plotting/assets/datasets.example.json) to `datasets.json` in your data directory, replace null placeholders, and provide the files required by your selected plot. The default directory is `plotting/assets`; select another with `--data-dir`. Relative input paths must stay inside that directory.
