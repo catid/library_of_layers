@@ -79,14 +79,14 @@ CUDA_VISIBLE_DEVICES=1 uv run python benchmarks/lol_step_baseline.py \
 ```
 
 The benchmark measures forward plus backward for the 592.9M configuration. A
-GB300 B1 run measured 153.3 ms per step for grouped dispatch versus 873.2 ms
-for the original padded expert dispatch. Batch 1 per GPU is therefore a
-practical starting point for an 8-GPU run with gradient accumulation.
+GB300 B1 run measured 145.8 ms per step for grouped dispatch. Batch 1 per GPU
+is therefore a practical starting point for an 8-GPU run with gradient
+accumulation.
 
 For a matched 8-GPU-style microbatch, use `--batch 8`. A clean GB300 run
-(`--warmup 5 --steps 10`, sequence length 4096) measured **286.2 ms** for
-grouped MHA dispatch and **1121.1 ms** for the original padded dispatch
-(**3.92x**). The grouped path processes about 114k tokens/s at this batch size.
+(`--warmup 5 --steps 10`, sequence length 4096) measured **273.4 ms** for
+grouped MHA dispatch and **1139.8 ms** for the original padded dispatch
+(**4.17x**). The grouped path processes about 120k tokens/s at this batch size.
 To keep a GQA comparison near the same parameter count, use 29 experts with
 two KV heads:
 
@@ -96,8 +96,8 @@ CUDA_VISIBLE_DEVICES=1 uv run python benchmarks/lol_step_baseline.py \
   --kv-heads 2 --experts 29
 ```
 
-That configuration is 603.1M parameters and measured **274.6 ms** per step on
-the same GB300, about **1.04x** faster than the 592.9M MHA configuration. A GQA
+That configuration is 603.1M parameters and measured about **260 ms** per step
+on the same GB300, about **1.05x** faster than the 592.9M MHA configuration. A GQA
 run with the original 24 experts is only 516.2M parameters, so its larger
 speedup is not a fair 600M comparison.
 With one KV head and 29 experts, the model is 598.0M parameters and measured
@@ -152,15 +152,19 @@ CUDA_VISIBLE_DEVICES=1 uv run python benchmarks/lol_step_baseline.py \
   --backprop-steps 4 --warmup 5 --steps 10
 ```
 
-On the GB300, a clean B8/S4096 run took 183.0 ms with only the final four
-depths differentiated, versus 286.2 ms for full-depth grouped MHA (1.56x).
+On the GB300, a clean B8/S4096 run took 184.5 ms with only the final four
+depths differentiated, versus 273.4 ms for full-depth grouped MHA (1.48x).
 This changes the gradient approximation and should be treated as a training
-schedule choice, while `--num-steps` changes the executed forward depth itself.
+schedule choice. Executing only eight of the 24 recurrent depths gives 129.4
+ms (2.11x), but changes the forward depth and therefore the model computation.
+Use `--num-steps 8` only when that tradeoff is intended.
 
 Grouped dispatch now casts each expert projection to the BF16 compute dtype
-before stacking and transposing it. This avoids a full FP32 temporary for every
-projection; isolated packing time fell about 8% on the GB300 and the change
-preserves autograd links to the expert parameters.
+before stacking and transposing it. It also applies the router residual weight
+while outputs remain in expert-sorted order, avoiding a restored `[B,T,D]`
+residual pass. These changes preserve autograd links and reduced the full
+grouped step by about 4–6% in matched B8 runs; isolated weight packing fell
+about 8%.
 
 ## Plotting
 Copy [the manifest template](plotting/assets/datasets.example.json) to `datasets.json` in your data directory, replace null placeholders, and provide the files required by your selected plot. The default directory is `plotting/assets`; select another with `--data-dir`. Relative input paths must stay inside that directory.
