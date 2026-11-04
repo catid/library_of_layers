@@ -325,10 +325,18 @@ class LoLWindow(VanillaGPTNeo):
         q, k = apply_rotary_emb(
             q, k, self.freqs_cis, position_ids=packed.position_ids
         )
+        q = q.transpose(1, 2)
+        k = k.transpose(1, 2)
+        v = v.transpose(1, 2)
+        if KV != H:
+            # Explicitly materialize the repeated KV heads.  This lets SDPA
+            # select its regular fused kernel instead of the enable_gqa
+            # wrapper, which repeats K/V internally on this backend.
+            repeat = H // KV
+            k = k.repeat_interleave(repeat, dim=1)
+            v = v.repeat_interleave(repeat, dim=1)
         y = F.scaled_dot_product_attention(
-            q.transpose(1, 2), k.transpose(1, 2),
-            v.transpose(1, 2), is_causal=True,
-            enable_gqa=KV != H,
+            q, k, v, is_causal=True,
         ).transpose(1, 2).contiguous().view(N, D)
         x1 = xs + _grouped_mm(
             y, weights["proj"], offsets=offsets
@@ -445,7 +453,7 @@ class LoLWindow(VanillaGPTNeo):
                 position_ids, doc_of_window, window_start_pos,
                 n_windows_total, depth=depth,
             )
-        if self.grouped_window_dispatch:
+        if self.grouped_window_dispatch and weight_per_window is not None:
             return selected_output
         return self._combine_expert_output(
             x, selected_output, global_window_id, weight_per_window,
