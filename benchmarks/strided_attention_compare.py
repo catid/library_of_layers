@@ -42,7 +42,7 @@ def _parser():
     )
     parser.add_argument(
         "--explicit-gqa", action="store_true",
-        help="Repeat K/V heads before SDPA (the dynamic grouped-model path).",
+        help="Diagnostic: repeat K/V heads before SDPA instead of native GQA.",
     )
     parser.add_argument(
         "--sdpa-backend",
