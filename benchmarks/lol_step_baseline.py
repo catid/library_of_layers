@@ -36,6 +36,7 @@ def _parser():
         "--kv-heads", type=int, default=None,
         help="Train a GQA variant with this many KV heads; null keeps MHA.",
     )
+    parser.add_argument("--experts", type=int, default=24)
     return parser
 
 
@@ -47,7 +48,7 @@ def _run(mode, args):
         n_head=20,
         n_kv_head=args.kv_heads,
         n_embd=1280,
-        n_experts=24,
+        n_experts=args.experts,
         window=128,
         window_stride=64,
         first_window_routing="learned_token_depth",
