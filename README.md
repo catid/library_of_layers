@@ -78,16 +78,17 @@ CUDA_VISIBLE_DEVICES=1 uv run python benchmarks/lol_step_baseline.py \
   --mode all --batch 1 --sequence-length 4096
 ```
 
-The benchmark measures forward plus backward for the 592.9M configuration. On
-the GB300 used during development, grouped dispatch took about 160 ms per step
-versus 827 ms for the original padded expert dispatch. Batch 8 took about 284
-ms per step, making batch 1 per GPU a practical starting point for an 8-GPU
-run with gradient accumulation.
+The benchmark measures forward plus backward for the 592.9M configuration. A
+GB300 B1 run measured 153.3 ms per step for grouped dispatch versus 873.2 ms
+for the original padded expert dispatch. Batch 1 per GPU is therefore a
+practical starting point for an 8-GPU run with gradient accumulation.
 
-For a matched 8-GPU-style microbatch, use `--batch 8`. A representative GB300
-run (`--warmup 5 --steps 10`, sequence length 4096) measured 282 ms for grouped
-dispatch and 1148 ms for padded dispatch (4.07x). To keep a GQA comparison near
-the same parameter count, use 29 experts with two KV heads:
+For a matched 8-GPU-style microbatch, use `--batch 8`. A clean GB300 run
+(`--warmup 5 --steps 10`, sequence length 4096) measured **286.2 ms** for
+grouped MHA dispatch and **1121.1 ms** for the original padded dispatch
+(**3.92x**). The grouped path processes about 114k tokens/s at this batch size.
+To keep a GQA comparison near the same parameter count, use 29 experts with
+two KV heads:
 
 ```bash
 CUDA_VISIBLE_DEVICES=1 uv run python benchmarks/lol_step_baseline.py \
@@ -95,8 +96,8 @@ CUDA_VISIBLE_DEVICES=1 uv run python benchmarks/lol_step_baseline.py \
   --kv-heads 2 --experts 29
 ```
 
-That configuration is 603.1M parameters and measured 273 ms per step on the
-same GB300 run, about 1.04x faster than the 592.9M MHA configuration. A GQA
+That configuration is 603.1M parameters and measured **274.6 ms** per step on
+the same GB300, about **1.04x** faster than the 592.9M MHA configuration. A GQA
 run with the original 24 experts is only 516.2M parameters, so its larger
 speedup is not a fair 600M comparison.
 With one KV head and 29 experts, the model is 598.0M parameters and measured
@@ -138,6 +139,25 @@ configuration. The paper's Premix/Postmix folding is therefore the appropriate
 inference optimization, while GQA is the useful train-time choice.
 The model accepts `model.n_kv_head`; leave it `null` for the original MHA
 checkpoint layout, or set (for example) `2` when training a new GQA model.
+
+The benchmark also exposes a training tradeoff that keeps the full forward
+receptive field while limiting autograd to the last recurrent depths:
+
+```bash
+CUDA_VISIBLE_DEVICES=1 uv run python benchmarks/lol_step_baseline.py \
+  --mode grouped --batch 8 --sequence-length 4096 \
+  --backprop-steps 4 --warmup 5 --steps 10
+```
+
+On the GB300, a clean B8/S4096 run took 183.0 ms with only the final four
+depths differentiated, versus 286.2 ms for full-depth grouped MHA (1.56x).
+This changes the gradient approximation and should be treated as a training
+schedule choice, while `--num-steps` changes the executed forward depth itself.
+
+Grouped dispatch now casts each expert projection to the BF16 compute dtype
+before stacking and transposing it. This avoids a full FP32 temporary for every
+projection; isolated packing time fell about 8% on the GB300 and the change
+preserves autograd links to the expert parameters.
 
 ## Plotting
 Copy [the manifest template](plotting/assets/datasets.example.json) to `datasets.json` in your data directory, replace null placeholders, and provide the files required by your selected plot. The default directory is `plotting/assets`; select another with `--data-dir`. Relative input paths must stay inside that directory.

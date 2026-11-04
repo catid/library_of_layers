@@ -37,6 +37,14 @@ def _parser():
         help="Train a GQA variant with this many KV heads; null keeps MHA.",
     )
     parser.add_argument("--experts", type=int, default=24)
+    parser.add_argument(
+        "--num-steps", type=int, default=None,
+        help="Execute at most this many recurrent routing depths (default: full depth).",
+    )
+    parser.add_argument(
+        "--backprop-steps", type=int, default=None,
+        help="Differentiate only through this many final recurrent depths; the forward still runs full depth.",
+    )
     return parser
 
 
@@ -90,9 +98,15 @@ def _run(mode, args):
     def step():
         model.zero_grad(set_to_none=True)
         with torch.autocast(args.device, dtype=torch.bfloat16):
-            loss = model(
-                idx, targets=targets, return_router_diagnostics=False,
-            )[0]
+            forward_kwargs = {
+                "targets": targets,
+                "return_router_diagnostics": False,
+            }
+            if args.num_steps is not None:
+                forward_kwargs["num_steps"] = args.num_steps
+            if args.backprop_steps is not None:
+                forward_kwargs["backprop_steps"] = args.backprop_steps
+            loss = model(idx, **forward_kwargs)[0]
         loss.backward()
         torch.cuda.synchronize(args.device)
 
