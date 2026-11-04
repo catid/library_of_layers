@@ -87,6 +87,9 @@ For a matched 8-GPU-style microbatch, use `--batch 8`. A clean GB300 run
 (`--warmup 5 --steps 10`, sequence length 4096) measured **272.7 ms** for
 grouped MHA dispatch and **1081.4 ms** for the original padded dispatch
 (**3.97x**). The grouped path processes about 120k tokens/s at this batch size.
+For the uncompiled baseline (`--no-compile --warmup 3 --steps 5`), the same
+run measured 705.0 ms grouped and 2407.2 ms padded. Per-block compilation is
+therefore a separate roughly 2.6x improvement for grouped dispatch.
 To keep a GQA comparison near the same parameter count, use 29 experts with
 two KV heads:
 
