@@ -261,6 +261,7 @@ class LoLWindow(VanillaGPTNeo):
         del doc_of_window  # Shared dispatch signature with the reference path.
         D = x.size(-1)
         W, H = self.attention_strategy.pack_width, self.config.n_head
+        KV = int(getattr(self.config, "n_kv_head", H))
         Dh, G = self._head_dim, self.n_experts
         if packed is None:
             packed = self.attention_strategy.pack_layout(
@@ -297,10 +298,12 @@ class LoLWindow(VanillaGPTNeo):
             gamma, beta = film
             h1 = h1 * gamma[0].to(h1.dtype) + beta[0].to(h1.dtype)
         qkv = _grouped_mm(h1, weights["qkv"], offsets=offsets)
-        q, k, v = qkv.split(D, dim=-1)
+        q_width = H * Dh
+        kv_width = KV * Dh
+        q, k, v = qkv.split((q_width, kv_width, kv_width), dim=-1)
         q = q.view(n_windows_total, W, H, Dh)
-        k = k.view(n_windows_total, W, H, Dh)
-        v = v.view(n_windows_total, W, H, Dh)
+        k = k.view(n_windows_total, W, KV, Dh)
+        v = v.view(n_windows_total, W, KV, Dh)
         epsq = self.transformer.experts[0].attn.q_norm.eps
         q = self._rms_grouped(
             q.reshape(N, H, Dh),
@@ -308,16 +311,17 @@ class LoLWindow(VanillaGPTNeo):
             epsq, q.dtype,
         ).view(n_windows_total, W, H, Dh)
         k = self._rms_grouped(
-            k.reshape(N, H, Dh),
+            k.reshape(N, KV, Dh),
             weights["kn"][token_expert].unsqueeze(1),
             epsq, k.dtype,
-        ).view(n_windows_total, W, H, Dh)
+        ).view(n_windows_total, W, KV, Dh)
         q, k = apply_rotary_emb(
             q, k, self.freqs_cis, position_ids=packed.position_ids
         )
         y = F.scaled_dot_product_attention(
             q.transpose(1, 2), k.transpose(1, 2),
             v.transpose(1, 2), is_causal=True,
+            enable_gqa=KV != H,
         ).transpose(1, 2).contiguous().view(N, D)
         x1 = xs + _grouped_mm(
             y, weights["proj"], offsets=offsets

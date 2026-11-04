@@ -46,6 +46,10 @@ class GPT2SmallConfig:
     vocab_size: int = 50432    # GPT-NeoX tokenizer-compatible vocab size
     n_layer: int = 12          # Number of transformer blocks
     n_head: int = 12           # Number of attention heads
+    # Optional grouped-query attention. ``None`` preserves MHA with one KV
+    # head per query head; smaller values reduce K/V projection width while
+    # retaining the same virtual query-head count.
+    n_kv_head: int | None = None
     n_embd: int = 768          # Embedding dimension
     normalization: str = "affine_rmsnorm"
 
@@ -106,6 +110,17 @@ class GPT2SmallConfig:
                                      # full-sequence blocks.
 
     def __post_init__(self):
+        self.n_head = int(self.n_head)
+        if self.n_head < 1:
+            raise ValueError("n_head must be positive.")
+        if self.n_kv_head is None:
+            self.n_kv_head = self.n_head
+        else:
+            self.n_kv_head = int(self.n_kv_head)
+        if not 1 <= self.n_kv_head <= self.n_head:
+            raise ValueError("n_kv_head must be in [1, n_head].")
+        if self.n_head % self.n_kv_head:
+            raise ValueError("n_kv_head must divide n_head.")
         self.moe_ffn = bool(self.moe_ffn)
         self.moe_ffn_scope = str(self.moe_ffn_scope).lower()
         if self.moe_ffn_scope not in {"all", "prelude_coda"}:

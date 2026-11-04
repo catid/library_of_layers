@@ -16,10 +16,10 @@ from .config import validate_paper_normalization
 _compiled_flex_attention = torch.compile(flex_attention, dynamic=True)
 
 
-def _run_flex_attention(query, key, value, *, block_mask):
+def _run_flex_attention(query, key, value, *, block_mask, enable_gqa=False):
     if query.device.type != "cpu":
         return _compiled_flex_attention(
-            query, key, value, block_mask=block_mask
+            query, key, value, block_mask=block_mask, enable_gqa=enable_gqa
         )
 
     batch_size, n_heads, query_length, _ = query.shape
@@ -40,7 +40,7 @@ def _run_flex_attention(query, key, value, *, block_mask):
         batch, head, query_positions, key_positions
     )
     return F.scaled_dot_product_attention(
-        query, key, value, attn_mask=allowed
+        query, key, value, attn_mask=allowed, enable_gqa=enable_gqa
     )
 
 
@@ -128,10 +128,14 @@ class CausalSelfAttentionNeo(nn.Module):
         if config.n_embd % config.n_head != 0:
             raise ValueError("n_embd must be divisible by n_head.")
         self.n_head = config.n_head
+        self.n_kv_head = int(getattr(config, "n_kv_head", config.n_head))
         self.n_embd = config.n_embd
         self.head_dim = config.n_embd // config.n_head
+        if self.n_head % self.n_kv_head:
+            raise ValueError("n_kv_head must divide n_head.")
+        qkv_width = (self.n_head + 2 * self.n_kv_head) * self.head_dim
         self.c_attn = nn.Linear(
-            config.n_embd, 3 * config.n_embd, bias=False
+            config.n_embd, qkv_width, bias=False
         )
         self.c_proj = nn.Linear(
             config.n_embd, config.n_embd, bias=False
@@ -143,16 +147,14 @@ class CausalSelfAttentionNeo(nn.Module):
         self, x, freqs_cis, position_ids=None, block_mask=None
     ):
         batch_size, sequence_length, embedding_dim = x.size()
-        query, key, value = self.c_attn(x).split(self.n_embd, dim=2)
-        shape = (
-            batch_size,
-            sequence_length,
-            self.n_head,
-            self.head_dim,
+        q_width = self.n_head * self.head_dim
+        kv_width = self.n_kv_head * self.head_dim
+        query, key, value = self.c_attn(x).split(
+            (q_width, kv_width, kv_width), dim=2
         )
-        query = query.view(shape)
-        key = key.view(shape)
-        value = value.view(shape)
+        query = query.view(batch_size, sequence_length, self.n_head, self.head_dim)
+        key = key.view(batch_size, sequence_length, self.n_kv_head, self.head_dim)
+        value = value.view(batch_size, sequence_length, self.n_kv_head, self.head_dim)
         query = self.q_norm(query)
         key = self.k_norm(key)
         query, key = apply_rotary_emb(
@@ -163,11 +165,13 @@ class CausalSelfAttentionNeo(nn.Module):
         value = value.transpose(1, 2)
         if block_mask is None:
             output = F.scaled_dot_product_attention(
-                query, key, value, is_causal=True
+                query, key, value, is_causal=True,
+                enable_gqa=self.n_kv_head != self.n_head,
             )
         else:
             output = _run_flex_attention(
-                query, key, value, block_mask=block_mask
+                query, key, value, block_mask=block_mask,
+                enable_gqa=self.n_kv_head != self.n_head,
             )
         output = output.transpose(1, 2).contiguous().view(
             batch_size, sequence_length, embedding_dim

@@ -12,6 +12,11 @@ model:
   block_size: 1024
   vocab_size: 50432
   qk_norm: true
+  # Optional GQA: set this below n_head to reduce K/V projection width.
+  # null keeps the paper's MHA layout and checkpoint compatibility.
+  n_kv_head: null
+  # Optional GQA; null retains one K/V head per query head.
+  n_kv_head: null
   normalization: affine_rmsnorm
   window: null
   window_stride: null
