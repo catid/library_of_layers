@@ -128,10 +128,13 @@ relative to the original 3.58 ms MHA kernel. GQA-2 remains the safer quality/
 capacity tradeoff for training (2.57 ms eager, 1.47 ms compiled).
 
 GQA reduces the QKV projection width and is the best direct candidate for this
-path. Virtual Head Attention (VHA) has lower physical QKV width, but its
-Premix and Postmix must be fused or folded into projections; naive runtime
-mixing can erase the gain. Neither changes the virtual-head SDPA interaction
-count, so they cannot provide a 2x end-to-end training speedup by themselves.
+path. The VHA comparison follows the [Virtual Head Attention paper]
+(https://arxiv.org/abs/2610.17959) and the Apache-2.0
+[PaddlePaddle implementation at commit `ab7ceded`](https://github.com/PaddlePaddle/VHA/tree/ab7ceded6e1ad6a6ba635afd19a152bc64fe8e2d).
+VHA has lower physical QKV width, but its Premix and Postmix must be fused or
+folded into projections; naive runtime mixing can erase the gain. Neither
+changes the virtual-head SDPA interaction count, so they cannot provide a 2x
+end-to-end training speedup by themselves.
 On the packed attention workload, the current GB300 measurements were 3.58 ms
 for MHA, 2.58 ms for GQA-2, and 4.52 ms for runtime VHA. VHA without the
 runtime Postmix was 2.96 ms; this is a useful lower bound, not a train-time
