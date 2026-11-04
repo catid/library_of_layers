@@ -389,6 +389,10 @@ class LoLWindow(VanillaGPTNeo):
         position_ids, doc_of_window, window_start_pos, n_windows_total,
         *, gradient_window_mask=None, depth=None,
     ):
+        grouped_weight = (
+            weight_per_window.to(x.dtype)
+            if self.grouped_window_dispatch else weight_per_window
+        )
         if gradient_window_mask is not None:
             # Pack once in (gradient policy, expert) order. Each partition is
             # contiguous and already expert-sorted, including partial windows.
@@ -431,7 +435,7 @@ class LoLWindow(VanillaGPTNeo):
                     if self.grouped_window_dispatch:
                         output = self._dispatch_windows_grouped(
                             *arguments, packed=subset, restore_output=False,
-                            depth=depth, weight_per_window=weight_per_window,
+                            depth=depth, weight_per_window=grouped_weight,
                         )
                     else:
                         output = self._dispatch_windows_padded(
@@ -445,7 +449,7 @@ class LoLWindow(VanillaGPTNeo):
                 x, global_window_id, expert_per_window,
                 position_ids, doc_of_window, window_start_pos,
                 n_windows_total, depth=depth,
-                weight_per_window=weight_per_window,
+                weight_per_window=grouped_weight,
             )
         else:
             selected_output = self._dispatch_windows_padded(
