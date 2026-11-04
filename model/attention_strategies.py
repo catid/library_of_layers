@@ -307,29 +307,35 @@ class _AttentionStrategy:
             flat_position - window_start_pos[flat_window]
         ).long()
         if sort_key is None:
-            sort_key = torch.arange(
+            # The metadata is already in token order. Avoid an argsort and
+            # inverse permutation for the dense shifted-window blocks.
+            permutation = torch.arange(
                 n_windows_total, device=values.device
             )
-        permutation = torch.argsort(sort_key, stable=True)
-        inverse = torch.empty_like(permutation)
-        inverse[permutation] = torch.arange(
-            n_windows_total, device=values.device
-        )
-        token_windows = inverse[flat_window]
+            token_windows = flat_window
+        else:
+            permutation = torch.argsort(sort_key, stable=True)
+            inverse = torch.empty_like(permutation)
+            inverse[permutation] = torch.arange(
+                n_windows_total, device=values.device
+            )
+            token_windows = inverse[flat_window]
 
         packed_values = values.new_zeros(
             n_windows_total, self.pack_width, width
         )
-        packed_positions = position_ids.new_zeros(
-            n_windows_total, self.pack_width
-        )
-        valid = torch.zeros(
-            n_windows_total, self.pack_width,
-            device=values.device, dtype=torch.bool,
-        )
+        # Tokens belonging to a window occupy the contiguous positions
+        # [0, length). Deriving these two tensors from lengths avoids two
+        # additional scatter assignments on every recurrent depth.
+        lengths = torch.bincount(
+            flat_window, minlength=n_windows_total
+        )[permutation]
+        offsets = torch.arange(self.pack_width, device=values.device)
+        valid = offsets.unsqueeze(0) < lengths.unsqueeze(1)
+        packed_positions = (
+            window_start_pos[permutation].unsqueeze(1) + offsets
+        ).masked_fill(~valid, 0)
         packed_values[token_windows, token_positions] = values.reshape(-1, width)
-        packed_positions[token_windows, token_positions] = flat_position
-        valid[token_windows, token_positions] = True
         return PackedWindows(
             packed_values,
             packed_positions,
