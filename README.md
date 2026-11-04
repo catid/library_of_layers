@@ -106,6 +106,18 @@ To compare attention head layouts on the packed 128-token windows, run:
 CUDA_VISIBLE_DEVICES=1 uv run python benchmarks/strided_attention_compare.py
 ```
 
+The packed attention benchmark also has a fixed-shape compiler path:
+
+```bash
+CUDA_VISIBLE_DEVICES=1 uv run python benchmarks/strided_attention_compare.py \
+  --compile --warmup 8 --steps 30
+```
+
+On the GB300 this reduces MHA packed attention from 3.58 ms to 1.65 ms per
+forward/backward step (2.17x). It is a kernel benchmark optimization; applying
+the compiled function inside the dynamically routed full model adds graph-call
+overhead and does not improve the end-to-end step.
+
 GQA reduces the QKV projection width and is the best direct candidate for this
 path. Virtual Head Attention (VHA) has lower physical QKV width, but its
 Premix and Postmix must be fused or folded into projections; naive runtime

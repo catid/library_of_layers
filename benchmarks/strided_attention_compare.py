@@ -32,6 +32,10 @@ def _parser():
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--steps", type=int, default=20)
     parser.add_argument(
+        "--compile", action="store_true",
+        help="Compile the fixed-shape attention block with torch.compile.",
+    )
+    parser.add_argument(
         "--postmix", choices=("runtime", "none"), default="runtime",
         help="VHA low-rank Postmix; use none to isolate Premix cost.",
     )
@@ -89,7 +93,7 @@ def _run(mode, args):
             postmix_a.requires_grad_()
             postmix_b = torch.zeros_like(postmix_a, requires_grad=True)
             parameters.extend((postmix_a, postmix_b))
-    def step():
+    def compute():
         q = F.linear(x, weights[0]).view(
             args.windows, args.window, physical_q_heads, head_dim,
         )
@@ -118,6 +122,12 @@ def _run(mode, args):
             mixed = torch.einsum("nwhd,hr->nwrd", y, postmix_a)
             y = y + torch.einsum("nwrd,hr->nwhd", mixed, postmix_b)
         return F.linear(y.reshape(-1, hidden), output_weight).sum()
+
+    # The packed benchmark has a fixed [windows, window] shape. Compiling the
+    # complete projection/norm/SDPA/output block lets Inductor fuse the small
+    # elementwise operations around SDPA. The dynamic full LoL dispatch path
+    # must keep its eager block boundary because its routed window counts vary.
+    step = torch.compile(compute, dynamic=False) if args.compile else compute
 
     for _ in range(args.warmup):
         for parameter in parameters:
