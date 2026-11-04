@@ -321,21 +321,45 @@ class _AttentionStrategy:
             )
             token_windows = inverse[flat_window]
 
-        packed_values = values.new_zeros(
-            n_windows_total, self.pack_width, width
-        )
-        # Tokens belonging to a window occupy the contiguous positions
-        # [0, length). Deriving these two tensors from lengths avoids two
-        # additional scatter assignments on every recurrent depth.
         lengths = torch.bincount(
             flat_window, minlength=n_windows_total
         )[permutation]
         offsets = torch.arange(self.pack_width, device=values.device)
-        valid = offsets.unsqueeze(0) < lengths.unsqueeze(1)
-        packed_positions = (
-            window_start_pos[permutation].unsqueeze(1) + offsets
-        ).masked_fill(~valid, 0)
-        packed_values[token_windows, token_positions] = values.reshape(-1, width)
+        # When every window is full, the input is already laid out as
+        # [windows, width, hidden]. Reshape and (for routed dispatch) select
+        # sorted windows instead of scattering every token.
+        all_full = flat_window.numel() == n_windows_total * self.pack_width
+        if all_full:
+            contiguous_values = values.reshape(
+                n_windows_total, self.pack_width, width
+            )
+            packed_values = (
+                contiguous_values
+                if sort_key is None
+                else contiguous_values.index_select(0, permutation)
+            )
+            valid = torch.ones(
+                n_windows_total, self.pack_width,
+                device=values.device, dtype=torch.bool,
+            )
+            packed_positions = (
+                window_start_pos[permutation].unsqueeze(1) + offsets
+            )
+        else:
+            packed_values = values.new_zeros(
+                n_windows_total, self.pack_width, width
+            )
+            # Tokens belonging to a window occupy the contiguous positions
+            # [0, length). Deriving these two tensors from lengths avoids two
+            # additional scatter assignments on every recurrent depth.
+            valid = offsets.unsqueeze(0) < lengths.unsqueeze(1)
+            packed_positions = (
+                window_start_pos[permutation].unsqueeze(1) + offsets
+            ).masked_fill(~valid, 0)
+            destination = token_windows * self.pack_width + token_positions
+            packed_values.reshape(-1, width).index_copy_(
+                0, destination, values.reshape(-1, width)
+            )
         return PackedWindows(
             packed_values,
             packed_positions,
