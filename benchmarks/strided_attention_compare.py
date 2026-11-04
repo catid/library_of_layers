@@ -39,6 +39,10 @@ def _parser():
         "--postmix", choices=("runtime", "none"), default="runtime",
         help="VHA low-rank Postmix; use none to isolate Premix cost.",
     )
+    parser.add_argument(
+        "--explicit-gqa", action="store_true",
+        help="Repeat K/V heads before SDPA (the dynamic grouped-model path).",
+    )
     return parser
 
 
@@ -115,8 +119,13 @@ def _run(mode, args):
         q = q.transpose(1, 2)
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
+        use_native_gqa = kv_heads != heads and not args.explicit_gqa
+        if kv_heads != heads and args.explicit_gqa:
+            repeat = heads // kv_heads
+            k = k.repeat_interleave(repeat, dim=1)
+            v = v.repeat_interleave(repeat, dim=1)
         y = F.scaled_dot_product_attention(
-            q, k, v, is_causal=True, enable_gqa=(kv_heads != heads),
+            q, k, v, is_causal=True, enable_gqa=use_native_gqa,
         ).transpose(1, 2)
         if mode == "vha" and args.postmix == "runtime":
             mixed = torch.einsum("nwhd,hr->nwrd", y, postmix_a)

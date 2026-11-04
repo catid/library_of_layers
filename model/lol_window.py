@@ -328,15 +328,8 @@ class LoLWindow(VanillaGPTNeo):
         q = q.transpose(1, 2)
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
-        if KV != H:
-            # Explicitly materialize the repeated KV heads.  This lets SDPA
-            # select its regular fused kernel instead of the enable_gqa
-            # wrapper, which repeats K/V internally on this backend.
-            repeat = H // KV
-            k = k.repeat_interleave(repeat, dim=1)
-            v = v.repeat_interleave(repeat, dim=1)
         y = F.scaled_dot_product_attention(
-            q, k, v, is_causal=True,
+            q, k, v, is_causal=True, enable_gqa=KV != H,
         ).transpose(1, 2).contiguous().view(N, D)
         x1 = xs + _grouped_mm(
             y, weights["proj"], offsets=offsets
