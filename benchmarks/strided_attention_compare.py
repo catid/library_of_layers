@@ -13,6 +13,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import math
 import time
 
 import torch
@@ -71,16 +72,21 @@ def _run(mode, args):
     premix = None
     postmix_a = postmix_b = None
     if mode == "vha":
+        # SelfAttentionVHA (PaddlePaddle/VHA, commit ab7ceded) initializes
+        # the full-rank Premix close to identity and uses a small Normal
+        # Postmix U; V is zero so the initial forward path is unchanged.
         premix = torch.eye(head_dim, device=device, dtype=dtype).expand(
             kv_heads, physical_q_heads, head_dim, head_dim,
         ).clone()
+        premix.add_(torch.randn_like(premix) * (0.1 / math.sqrt(head_dim)))
         premix.requires_grad_()
         parameters.append(premix)
         if args.postmix == "runtime":
             rank = max(1, heads // 4)
             postmix_a = torch.randn(
-                heads, rank, device=device, dtype=dtype, requires_grad=True,
-            )
+                heads, rank, device=device, dtype=dtype,
+            ) * 0.01
+            postmix_a.requires_grad_()
             postmix_b = torch.zeros_like(postmix_a, requires_grad=True)
             parameters.extend((postmix_a, postmix_b))
     def step():
