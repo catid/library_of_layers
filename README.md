@@ -96,7 +96,7 @@ CUDA_VISIBLE_DEVICES=1 uv run python benchmarks/lol_step_baseline.py \
 ```
 
 That configuration is 603.1M parameters and measured 273 ms per step on the
-same GB300 run, about 1.05x faster than the 592.9M MHA configuration. A GQA
+same GB300 run, about 1.04x faster than the 592.9M MHA configuration. A GQA
 run with the original 24 experts is only 516.2M parameters, so its larger
 speedup is not a fair 600M comparison.
 
