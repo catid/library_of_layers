@@ -358,9 +358,9 @@ class LoLWindow(VanillaGPTNeo):
             # full [B,T,D] residual pass.
             packed_weight = weight_per_window[
                 packed.window_permutation
-            ].to(x2.dtype).repeat_interleave(W).unsqueeze(-1)
-            xsp = xs
-            x2 = xsp + (x2 - xsp) * packed_weight
+            ].to(x2.dtype).view(n_windows_total, 1, 1)
+            xsp = xs.view(n_windows_total, W, D)
+            x2 = xsp + (x2.view(n_windows_total, W, D) - xsp) * packed_weight
         output = x2.view(n_windows_total, W, D)
         return packed.restore(output) if restore_output else output
 
