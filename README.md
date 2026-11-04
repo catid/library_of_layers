@@ -79,7 +79,7 @@ CUDA_VISIBLE_DEVICES=1 uv run python benchmarks/lol_step_baseline.py \
 ```
 
 The benchmark measures forward plus backward for the 592.9M configuration. A
-GB300 B1 run measured 145.8 ms per step for grouped dispatch. Batch 1 per GPU
+GB300 B1 run measured 158.8 ms per step for grouped dispatch. Batch 1 per GPU
 is therefore a practical starting point for an 8-GPU run with gradient
 accumulation.
 
