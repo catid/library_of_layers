@@ -118,6 +118,11 @@ forward/backward step (2.17x). It is a kernel benchmark optimization; applying
 the compiled function inside the dynamically routed full model adds graph-call
 overhead and does not improve the end-to-end step.
 
+Combining compilation with one KV head gives a second combined speedup: the
+same workload measured 2.51 ms eager and 1.45 ms compiled for GQA-1, or 2.46x
+relative to the original 3.58 ms MHA kernel. GQA-2 remains the safer quality/
+capacity tradeoff for training (2.57 ms eager, 1.47 ms compiled).
+
 GQA reduces the QKV projection width and is the best direct candidate for this
 path. Virtual Head Attention (VHA) has lower physical QKV width, but its
 Premix and Postmix must be fused or folded into projections; naive runtime
