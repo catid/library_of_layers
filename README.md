@@ -99,6 +99,9 @@ That configuration is 603.1M parameters and measured 273 ms per step on the
 same GB300 run, about 1.04x faster than the 592.9M MHA configuration. A GQA
 run with the original 24 experts is only 516.2M parameters, so its larger
 speedup is not a fair 600M comparison.
+With one KV head and 29 experts, the model is 598.0M parameters and measured
+275 ms per step, still only about 1.03x faster; routed FFN/GEMM work dominates
+the end-to-end result.
 
 To compare attention head layouts on the packed 128-token windows, run:
 
@@ -129,8 +132,8 @@ Premix and Postmix must be fused or folded into projections; naive runtime
 mixing can erase the gain. Neither changes the virtual-head SDPA interaction
 count, so they cannot provide a 2x end-to-end training speedup by themselves.
 On the packed attention workload, the current GB300 measurements were 3.58 ms
-for MHA, 2.58 ms for GQA-2, and 4.56 ms for runtime VHA. VHA without the
-runtime Postmix was 3.00 ms; this is a useful lower bound, not a train-time
+for MHA, 2.58 ms for GQA-2, and 4.52 ms for runtime VHA. VHA without the
+runtime Postmix was 2.96 ms; this is a useful lower bound, not a train-time
 configuration. The paper's Premix/Postmix folding is therefore the appropriate
 inference optimization, while GQA is the useful train-time choice.
 The model accepts `model.n_kv_head`; leave it `null` for the original MHA
