@@ -76,7 +76,7 @@ def _run(mode, args):
         # the full-rank Premix close to identity and uses a small Normal
         # Postmix U; V is zero so the initial forward path is unchanged.
         premix = torch.eye(head_dim, device=device, dtype=dtype).expand(
-            kv_heads, physical_q_heads, head_dim, head_dim,
+            kv_heads, head_dim, head_dim,
         ).clone()
         premix.add_(torch.randn_like(premix) * (0.1 / math.sqrt(head_dim)))
         premix.requires_grad_()
@@ -103,7 +103,7 @@ def _run(mode, args):
             # Each physical query head is premixed independently for every
             # KV group, before QK normalization and RoPE as in the paper. The
             # virtual heads are then flattened for SDPA.
-            q = torch.einsum("nwgd,kgde->nwkge", q, premix).reshape(
+            q = torch.einsum("nwgd,kde->nwkge", q, premix).reshape(
                 args.windows, args.window, heads, head_dim,
             )
         q = _rms_norm(q)
