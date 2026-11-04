@@ -69,5 +69,32 @@ Before evaluation, set the `CHECKPOINT_*` variables shown in the script to the c
 export CHECKPOINT_sudoku_lol=/path/to/checkpoint.pt
 ```
 
+## Strided-attention benchmarks
+
+The 600M-class grouped shifted-window path can be measured on one GPU with:
+
+```bash
+CUDA_VISIBLE_DEVICES=1 uv run python benchmarks/lol_step_baseline.py \
+  --mode all --batch 1 --sequence-length 4096
+```
+
+The benchmark measures forward plus backward for the 592.9M configuration. On
+the GB300 used during development, grouped dispatch took about 160 ms per step
+versus 827 ms for the original padded expert dispatch. Batch 8 took about 284
+ms per step, making batch 1 per GPU a practical starting point for an 8-GPU
+run with gradient accumulation.
+
+To compare attention head layouts on the packed 128-token windows, run:
+
+```bash
+CUDA_VISIBLE_DEVICES=1 uv run python benchmarks/strided_attention_compare.py
+```
+
+GQA reduces the QKV projection width and is the best direct candidate for this
+path. Virtual Head Attention (VHA) has lower physical QKV width, but its
+Premix and Postmix must be fused or folded into projections; naive runtime
+mixing can erase the gain. Neither changes the virtual-head SDPA interaction
+count, so they cannot provide a 2x end-to-end training speedup by themselves.
+
 ## Plotting
 Copy [the manifest template](plotting/assets/datasets.example.json) to `datasets.json` in your data directory, replace null placeholders, and provide the files required by your selected plot. The default directory is `plotting/assets`; select another with `--data-dir`. Relative input paths must stay inside that directory.
