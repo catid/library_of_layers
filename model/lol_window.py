@@ -263,7 +263,7 @@ class LoLWindow(VanillaGPTNeo):
         self, x, global_window_id, expert_per_window,
         position_ids, doc_of_window, window_start_pos, n_windows_total,
         *, packed=None, restore_output=True,
-        depth=None,
+        depth=None, weight_per_window=None,
     ):
         del doc_of_window  # Shared dispatch signature with the reference path.
         D = x.size(-1)
@@ -351,6 +351,16 @@ class LoLWindow(VanillaGPTNeo):
             weights["down"], offsets=offsets,
         )
 
+        if weight_per_window is not None:
+            # Apply the router residual multiplier while values are still in
+            # expert-sorted order.  This avoids restoring x2 to token order,
+            # gathering the same window weights again, and then doing a second
+            # full [B,T,D] residual pass.
+            packed_weight = weight_per_window[
+                packed.window_permutation
+            ].to(x2.dtype).repeat_interleave(W).unsqueeze(-1)
+            xsp = xs
+            x2 = xsp + (x2 - xsp) * packed_weight
         output = x2.view(n_windows_total, W, D)
         return packed.restore(output) if restore_output else output
 
@@ -413,7 +423,7 @@ class LoLWindow(VanillaGPTNeo):
                     if self.grouped_window_dispatch:
                         output = self._dispatch_windows_grouped(
                             *arguments, packed=subset, restore_output=False,
-                            depth=depth,
+                            depth=depth, weight_per_window=weight_per_window,
                         )
                     else:
                         output = self._dispatch_windows_padded(
@@ -427,6 +437,7 @@ class LoLWindow(VanillaGPTNeo):
                 x, global_window_id, expert_per_window,
                 position_ids, doc_of_window, window_start_pos,
                 n_windows_total, depth=depth,
+                weight_per_window=weight_per_window,
             )
         else:
             selected_output = self._dispatch_windows_padded(
@@ -434,6 +445,8 @@ class LoLWindow(VanillaGPTNeo):
                 position_ids, doc_of_window, window_start_pos,
                 n_windows_total, depth=depth,
             )
+        if self.grouped_window_dispatch:
+            return selected_output
         return self._combine_expert_output(
             x, selected_output, global_window_id, weight_per_window,
         )
