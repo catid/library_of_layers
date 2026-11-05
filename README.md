@@ -155,6 +155,21 @@ The GDN2 measurement uses the machine-local GDN2/cuDNN benchmark because that
 implementation is not yet part of this LoL repository; its environment must
 include the cuDNN 1.32 package and the CUTLASS DSL extension.
 
+The composed repeat was also benchmarked directly, including FFN and residual
+work in every layer. The benchmark uses `FF=12000`, producing **600.08M
+parameters**:
+
+```bash
+CUDA_VISIBLE_DEVICES=1 uv run python benchmarks/gdn2_lol_fa_repeat.py
+```
+
+At B1/S4096, BF16, AdamW forward plus backward, and five timed steps after two
+warmups, the actual repeat measured **17.33 ms** (236.4k tokens/s). This is
+higher than the 13.69 ms sum of isolated core timings because it includes four
+FFNs, residuals, normalizations, projections, and optimizer work. The composed
+implementation is `GDN2(cuDNN) → LoL(GQA-4, local FlashAttention) →
+LoL(GQA-4, local FlashAttention) → FA(cuDNN)`.
+
 For a width-matched 600M-class comparison (`D=3072`, 48 heads, head dimension
 64), the same B1/S4096 measurements were: cuDNN GDN2 **5.74 ms**, LoL GQA-4
 local attention **3.42 ms**, and latest cuDNN dense FA **1.12 ms**. A
