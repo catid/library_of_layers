@@ -175,6 +175,8 @@ This changes the gradient approximation and should be treated as a training
 schedule choice. Executing only eight of the 24 recurrent depths gives 129.4
 ms (2.11x), but changes the forward depth and therefore the model computation.
 Use `--num-steps 8` only when that tradeoff is intended.
+With fair GQA-2 (603.1M parameters), the same eight-depth schedule measured
+123.0 ms at B8/S4096, or **2.22x** versus full-depth grouped MHA.
 
 Grouped dispatch now casts each expert projection to the BF16 compute dtype
 before stacking and transposing it. It also applies the router residual weight
