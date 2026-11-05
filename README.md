@@ -199,6 +199,21 @@ the remainder **~12.3%**. That is about **1.7% faster** than the reference
 GDN2 configuration; the improvement comes from GDN2 forward/projection work,
 while its backward remains the largest part of that layer.
 
+The fixed-shape repeat also supports whole-step CUDA Graph capture with
+`GDN2_GRAPH=1`. With the optimized cuDNN/FROST GDN2 path, fused projections,
+and BF16 (Transformer Engine FP8 was unavailable in the local environment),
+the complete B1/S4096 repeat measured **16.19 ms**. Reproduce it with:
+
+```bash
+CUDA_VISIBLE_DEVICES=1 GDN2_ROOT=/home/catid/gdn2 GDN2_GRAPH=1 \
+  uv run python benchmarks/gdn2_lol_fa_repeat.py
+```
+
+This is a complete `GDN2 → LoL → LoL → FA` training step including all FFNs,
+residuals, and AdamW. It is about **6.6% faster** than the earlier 17.33 ms
+eager reference repeat. It does not include TE FP8; enabling that requires a
+working Transformer Engine CUDA/PyTorch extension on the machine.
+
 For a width-matched 600M-class comparison (`D=3072`, 48 heads, head dimension
 64), the same B1/S4096 measurements were: cuDNN GDN2 **5.74 ms**, LoL GQA-4
 local attention **3.42 ms**, and latest cuDNN dense FA **1.12 ms**. A

@@ -7,7 +7,14 @@ _repo_root = Path(os.environ.get("GDN2_ROOT", "/home/catid"))
 _fla_root = Path(os.environ.get("FLA_ROOT", "/home/catid/gdn2-gb300/flash-linear-attention"))
 _cudnn_root = Path(os.environ.get("CUDNN_ROOT", "/home/catid/cudnn132"))
 sys.path[:0] = [str(_repo_root), str(_fla_root), str(_cudnn_root), str(_cudnn_root / "nvidia_cutlass_dsl/dsl_packages")]
-from gdn2bench.gdn2 import GatedDeltaNet2
+_gdn2_root = Path(os.environ.get("GDN2_ROOT", "/home/catid/gdn2"))
+if (_gdn2_root / "lit_gpt/gdn2.py").exists():
+ import types
+ _lit = types.ModuleType("lit_gpt"); _lit.__path__ = [str(_gdn2_root / "lit_gpt")]
+ sys.modules.setdefault("lit_gpt", _lit)
+ from lit_gpt.gdn2 import GatedDeltaNet2
+else:
+ from gdn2bench.gdn2 import GatedDeltaNet2
 D=3072; H=48; KV=4; HD=64; W=128; FF=12000; S=4096; B=1
 class FFN(nn.Module):
  def __init__(self):
@@ -16,7 +23,7 @@ class FFN(nn.Module):
   z=self.g(self.n(x)); return x+self.d(F.silu(z[...,:FF])*z[...,FF:])
 class G(nn.Module):
  def __init__(self):
-  super().__init__(); self.n=nn.RMSNorm(D,eps=1e-5); self.m=GatedDeltaNet2(hidden_size=D,expand_v=2,head_dim=64,num_heads=H,mode='chunk',use_short_conv=False,backend='cudnn').to(dtype=torch.bfloat16); self.f=FFN()
+  super().__init__(); self.n=nn.RMSNorm(D,eps=1e-5); self.m=GatedDeltaNet2(hidden_size=D,expand_v=2,head_dim=64,num_heads=H,mode='chunk',use_short_conv=False,backend='cudnn',fused_projections=True,disable_recompute=True).to(dtype=torch.bfloat16); self.f=FFN()
  def forward(self,x): return self.f(x+self.m(self.n(x))[0])
 class A(nn.Module):
  def __init__(self,local):
@@ -38,11 +45,16 @@ class M(nn.Module):
  def forward(self,x):
   for l in self.layers:x=l(x)
   return self.out(x)
-torch.manual_seed(1); m=M().cuda().to(torch.bfloat16).train(); print('params',sum(p.numel() for p in m.parameters())/1e6,flush=True); x=torch.randn(B,S,D,device='cuda',dtype=torch.bfloat16); opt=torch.optim.AdamW(m.parameters(),lr=1e-4,fused=True)
+torch.manual_seed(1); m=M().cuda().to(torch.bfloat16).train(); print('params',sum(p.numel() for p in m.parameters())/1e6,flush=True); x=torch.randn(B,S,D,device='cuda',dtype=torch.bfloat16); opt=torch.optim.AdamW(m.parameters(),lr=1e-4,fused=True,capturable=bool(int(os.environ.get('GDN2_GRAPH','0'))))
 def step():
  opt.zero_grad(set_to_none=True); y=m(x); loss=y.float().square().mean(); loss.backward(); opt.step()
-for _ in range(2):step()
-torch.cuda.synchronize(); ts=[]
+for _ in range(3):step()
+torch.cuda.synchronize(); graph=None
+if os.environ.get('GDN2_GRAPH','0') == '1':
+ graph=torch.cuda.CUDAGraph()
+ with torch.cuda.graph(graph): step()
+ torch.cuda.synchronize()
+ts=[]
 for _ in range(5):
- st,en=torch.cuda.Event(True),torch.cuda.Event(True);st.record();step();en.record();en.synchronize();ts.append(st.elapsed_time(en))
+ st,en=torch.cuda.Event(True),torch.cuda.Event(True);st.record();graph.replay() if graph is not None else step();en.record();en.synchronize();ts.append(st.elapsed_time(en))
 print('times',ts,'median',statistics.median(ts),'mean',statistics.mean(ts),flush=True)
