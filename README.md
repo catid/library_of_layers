@@ -99,12 +99,13 @@ CUDA_VISIBLE_DEVICES=1 uv run python benchmarks/lol_step_baseline.py \
   --kv-heads 2 --experts 29
 ```
 
-That configuration is 603.1M parameters and measured **262.6 ms** per step on
-the same GB300, about **1.04x** faster than the 592.9M MHA configuration. A GQA
+That configuration is 603.1M parameters; its native `enable_gqa` baseline was
+**262.6 ms** per step on the same GB300. The direct FlashAttention path below
+is faster. A GQA
 run with the original 24 experts is only 516.2M parameters, so its larger
 speedup is not a fair 600M comparison.
 With one KV head and 29 experts, the model is 598.0M parameters and measured
-275 ms per step, still only about 1.03x faster; routed FFN/GEMM work dominates
+**255.7 ms** with direct FlashAttention; routed FFN/GEMM work dominates
 the end-to-end result.
 
 The grouped GQA path now uses the low-level Blackwell FlashAttention operator
