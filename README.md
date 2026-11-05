@@ -133,6 +133,34 @@ forward/backward step (2.17x). It is a kernel benchmark optimization; applying
 the compiled function inside the dynamically routed full model adds graph-call
 overhead and does not improve the end-to-end step.
 
+The fixed-shape benchmark also accepts `--compile-mode max-autotune`. With
+GQA-2 and explicit FlashAttention, this measured **1.27 ms** per
+forward/backward step (versus 1.37 ms with the default compile mode). The
+autotuning cost is paid at compilation time, so this setting is intended for
+long-running training jobs with a stable window shape.
+
+Passing `--fused-qkv` combines the Q, K, and V projections into one GEMM before
+the attention kernel. Together with `--compile-mode max-autotune`, GQA-2
+measured **1.21 ms** on the same workload. The grouped production path already
+has a grouped QKV projection, so this benchmark option measures the equivalent
+fixed-shape projection schedule.
+
+Packed varlen FlashAttention was tested with the same 264 windows and measured
+**1.30 ms**, slower than the regular fixed-window kernel because every window
+already has the same length. BF16 RMS accumulation also showed no measurable
+gain.
+An explicit bounded-window varlen formulation was slower again at **1.32 ms**.
+
+A matched single-process run using fused QKV, native RMSNorm, and explicit
+FlashAttention measured **1.395 ms** for MHA and **1.261 ms** for GQA-2
+(1.11x). VHA measured **2.559 ms** with runtime Postmix, confirming that its
+extra mixing work outweighs the narrower projection in this training kernel.
+Calling the ATen FlashAttention operator directly for MHA measured **1.401 ms**
+versus **1.405 ms** through the public SDPA wrapper, so the direct call is
+effectively neutral there as well.
+The cuDNN SDPA backend measured **1.408 ms** for GQA-2, slower than the
+1.261 ms FlashAttention result.
+
 For this fixed shape, selecting the backend explicitly gives another isolated
 kernel improvement:
 
@@ -167,6 +195,23 @@ configuration. The paper's Premix/Postmix folding is therefore the appropriate
 inference optimization, while GQA is the useful train-time choice.
 The model accepts `model.n_kv_head`; leave it `null` for the original MHA
 checkpoint layout, or set (for example) `2` when training a new GQA model.
+
+On the full B8/S4096 603.1M GQA-2 model, the current grouped path measures
+**255.1 ms** per forward/backward step. Inductor's `reduce-overhead` mode was
+also tested end to end and regressed to about **1.71 s** because the dynamic
+routed backward graph does not reach the CUDA-graph fast path; leave the
+default compile mode enabled for training.
+
+For fixed-shape single-document batches, setting `LOL_COMPILE_DYNAMIC=0` lets
+Inductor specialize the routed dispatch dimensions. One clean run measured
+**250.5 ms** at B8/S4096 (about 1.8% faster), but this path is sensitive to
+host load and remains opt-in until repeated runs confirm the gain.
+
+The routed profile confirms why further attention-only work has limited
+end-to-end impact: in a profiled B1/S4096 step, FlashAttention backward and
+its transpose kernels account for about **7.8 ms** of CUDA time, while grouped
+GEMMs and routing/elementwise kernels account for the majority of the step.
+Use `--profile` on `benchmarks/lol_step_baseline.py` to reproduce the table.
 
 The benchmark also exposes a training tradeoff that keeps the full forward
 receptive field while limiting autograd to the last recurrent depths:

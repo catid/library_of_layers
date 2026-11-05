@@ -1,4 +1,5 @@
 import math
+import os
 from dataclasses import dataclass, replace
 
 import torch
@@ -178,23 +179,29 @@ class LoLWindow(VanillaGPTNeo):
     # torch.compile entry point
     # ------------------------------------------------------------------
     def _compile_middle(self):
+        compile_mode = os.environ.get("LOL_COMPILE_MODE", "default")
+        compile_dynamic = os.environ.get("LOL_COMPILE_DYNAMIC", "1") != "0"
         for blocks in (
             self.prelude_blocks, self.coda_blocks,
         ):
             for index in range(len(blocks)):
-                blocks[index] = torch.compile(blocks[index])
+                blocks[index] = torch.compile(
+                    blocks[index], mode=compile_mode, dynamic=compile_dynamic
+                )
         if self.grouped_window_dispatch:
             # Window counts vary with document boundaries and recurrent depth,
             # while batch, sequence, width, heads and window size stay fixed.
             # Let automatic dynamism specialize those stable dimensions and
             # promote only dimensions that actually change.
             self._dispatch_windows_grouped = torch.compile(
-                self._dispatch_windows_grouped
+                self._dispatch_windows_grouped,
+                mode=compile_mode, dynamic=compile_dynamic,
             )
         else:
             for i in range(self.n_experts):
                 self.transformer.experts[i] = torch.compile(
-                    self.transformer.experts[i]
+                    self.transformer.experts[i],
+                    mode=compile_mode, dynamic=compile_dynamic,
                 )
 
     def _router_for_depth(self, depth):

@@ -37,12 +37,48 @@ def _parser():
         help="Compile the fixed-shape attention block with torch.compile.",
     )
     parser.add_argument(
+        "--compile-mode", choices=("default", "reduce-overhead", "max-autotune", "max-autotune-no-cudagraphs"),
+        default="default", help="Inductor mode for the compiled path.",
+    )
+    parser.add_argument(
+        "--fullgraph", action="store_true",
+        help="Require one complete Dynamo graph for the compiled path.",
+    )
+    parser.add_argument(
+        "--profile", action="store_true",
+        help="Print the CUDA profiler table for one measured step.",
+    )
+    parser.add_argument(
+        "--fused-qkv", action="store_true",
+        help="Use one fused QKV projection instead of three linears.",
+    )
+    parser.add_argument(
+        "--fused-qk-norm", action="store_true",
+        help="Normalize Q and K in one concatenated RMSNorm operation.",
+    )
+    parser.add_argument(
+        "--native-rms", action="store_true",
+        help="Use PyTorch's fused RMSNorm primitive in the fixed-shape test.",
+    )
+    parser.add_argument(
+        "--bf16-rms", action="store_true",
+        help="Accumulate RMSNorm statistics in BF16 (diagnostic only).",
+    )
+    parser.add_argument(
         "--postmix", choices=("runtime", "none"), default="runtime",
         help="VHA low-rank Postmix; use none to isolate Premix cost.",
     )
     parser.add_argument(
         "--explicit-gqa", action="store_true",
         help="Diagnostic: repeat K/V heads before SDPA instead of native GQA.",
+    )
+    parser.add_argument(
+        "--low-level-flash", action="store_true",
+        help="Use ATen's FlashAttention operator directly on CUDA.",
+    )
+    parser.add_argument(
+        "--varlen-flash", action="store_true",
+        help="Use the packed varlen FlashAttention operator for CUDA.",
     )
     parser.add_argument(
         "--sdpa-backend",
@@ -55,6 +91,10 @@ def _parser():
 
 def _rms_norm(x):
     return x * torch.rsqrt(x.float().square().mean(-1, keepdim=True) + 1e-6).to(x.dtype)
+
+
+def _rms_norm_bf16(x):
+    return x * torch.rsqrt(x.square().mean(-1, keepdim=True) + 1e-6)
 
 
 def _run(mode, args):
@@ -75,10 +115,17 @@ def _run(mode, args):
     x = torch.randn(
         args.windows, args.window, hidden, device=device, dtype=dtype,
     )
-    weights = [
-        torch.randn(width, hidden, device=device, dtype=dtype, requires_grad=True)
-        for width in (q_width, kv_width, kv_width)
-    ]
+    if args.fused_qkv:
+        qkv_weight = torch.randn(
+            q_width + 2 * kv_width, hidden, device=device, dtype=dtype,
+            requires_grad=True,
+        )
+        weights = [qkv_weight]
+    else:
+        weights = [
+            torch.randn(width, hidden, device=device, dtype=dtype, requires_grad=True)
+            for width in (q_width, kv_width, kv_width)
+        ]
     output_weight = torch.randn(
         hidden, hidden, device=device, dtype=dtype, requires_grad=True,
     )
@@ -105,15 +152,16 @@ def _run(mode, args):
             postmix_b = torch.zeros_like(postmix_a, requires_grad=True)
             parameters.extend((postmix_a, postmix_b))
     def compute():
-        q = F.linear(x, weights[0]).view(
-            args.windows, args.window, physical_q_heads, head_dim,
-        )
-        k = F.linear(x, weights[1]).view(
-            args.windows, args.window, kv_heads, head_dim,
-        )
-        v = F.linear(x, weights[2]).view(
-            args.windows, args.window, kv_heads, head_dim,
-        )
+        if args.fused_qkv:
+            qkv = F.linear(x, weights[0])
+            q, k, v = qkv.split((q_width, kv_width, kv_width), dim=-1)
+        else:
+            q = F.linear(x, weights[0])
+            k = F.linear(x, weights[1])
+            v = F.linear(x, weights[2])
+        q = q.view(args.windows, args.window, physical_q_heads, head_dim)
+        k = k.view(args.windows, args.window, kv_heads, head_dim)
+        v = v.view(args.windows, args.window, kv_heads, head_dim)
         if mode == "vha":
             # Each physical query head is premixed independently for every
             # KV group, before QK normalization and RoPE as in the paper. The
@@ -121,8 +169,18 @@ def _run(mode, args):
             q = torch.einsum("nwgd,kde->nwkge", q, premix).reshape(
                 args.windows, args.window, heads, head_dim,
             )
-        q = _rms_norm(q)
-        k = _rms_norm(k)
+        norm = (
+            lambda z: F.rms_norm(z, (z.size(-1),), eps=1e-6)
+            if args.native_rms else _rms_norm
+        )
+        if args.bf16_rms:
+            norm = _rms_norm_bf16
+        if args.fused_qk_norm:
+            qk = norm(torch.cat((q, k), dim=2))
+            q, k = qk.split((physical_q_heads, kv_heads), dim=2)
+        else:
+            q = norm(q)
+            k = norm(k)
         q = q.transpose(1, 2)
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
@@ -131,7 +189,25 @@ def _run(mode, args):
             repeat = heads // kv_heads
             k = k.repeat_interleave(repeat, dim=1)
             v = v.repeat_interleave(repeat, dim=1)
-        if args.sdpa_backend == "default":
+        use_varlen_flash = args.varlen_flash and q.device.type == "cuda"
+        use_low_level_flash = args.low_level_flash and q.device.type == "cuda"
+        if use_varlen_flash:
+            total = args.windows * args.window
+            cu = torch.arange(
+                0, total + 1, args.window, device=q.device, dtype=torch.int32
+            )
+            y, *_ = torch.ops.aten._flash_attention_forward(
+                q.transpose(1, 2).reshape(total, heads, head_dim),
+                k.transpose(1, 2).reshape(total, kv_heads, head_dim),
+                v.transpose(1, 2).reshape(total, kv_heads, head_dim),
+                cu, cu, args.window, args.window, 0.0, True, False,
+            )
+            y = y.view(args.windows, args.window, heads, head_dim)
+        elif use_low_level_flash:
+            y, *_ = torch.ops.aten._scaled_dot_product_flash_attention.default(
+                q, k, v, 0.0, True, False,
+            )
+        elif args.sdpa_backend == "default":
             y = F.scaled_dot_product_attention(
                 q, k, v, is_causal=True, enable_gqa=use_native_gqa,
             )
@@ -156,7 +232,13 @@ def _run(mode, args):
     # complete projection/norm/SDPA/output block lets Inductor fuse the small
     # elementwise operations around SDPA. The dynamic full LoL dispatch path
     # must keep its eager block boundary because its routed window counts vary.
-    step = torch.compile(compute, dynamic=False) if args.compile else compute
+    step = (
+        torch.compile(
+            compute, dynamic=False, mode=args.compile_mode,
+            fullgraph=args.fullgraph,
+        )
+        if args.compile else compute
+    )
 
     for _ in range(args.warmup):
         for parameter in parameters:
@@ -168,7 +250,18 @@ def _run(mode, args):
         for parameter in parameters:
             parameter.grad = None
         started = time.perf_counter()
-        step().backward()
+        if args.profile and not timings:
+            with torch.profiler.profile(
+                activities=[torch.profiler.ProfilerActivity.CPU,
+                            torch.profiler.ProfilerActivity.CUDA],
+                record_shapes=False,
+            ) as prof:
+                step().backward()
+            print(prof.key_averages().table(
+                sort_by="cuda_time_total", row_limit=20
+            ))
+        else:
+            step().backward()
         torch.cuda.synchronize(device)
         timings.append(time.perf_counter() - started)
     median = sorted(timings)[len(timings) // 2]

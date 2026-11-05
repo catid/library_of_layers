@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import gc
+import os
 import pathlib
 import sys
 import time
@@ -32,6 +33,7 @@ def _parser():
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--steps", type=int, default=5)
     parser.add_argument("--no-compile", action="store_true")
+    parser.add_argument("--profile", action="store_true")
     parser.add_argument(
         "--kv-heads", type=int, default=None,
         help="Train a GQA variant with this many KV heads; null keeps MHA.",
@@ -97,6 +99,8 @@ def _run(mode, args):
 
     def step():
         model.zero_grad(set_to_none=True)
+        if os.environ.get("LOL_CUDAGRAPH_STEP", "0") == "1":
+            torch.compiler.cudagraph_mark_step_begin()
         with torch.autocast(args.device, dtype=torch.bfloat16):
             forward_kwargs = {
                 "targets": targets,
@@ -107,7 +111,19 @@ def _run(mode, args):
             if args.backprop_steps is not None:
                 forward_kwargs["backprop_steps"] = args.backprop_steps
             loss = model(idx, **forward_kwargs)[0]
-        loss.backward()
+        if args.profile:
+            with torch.profiler.profile(
+                activities=[torch.profiler.ProfilerActivity.CPU,
+                            torch.profiler.ProfilerActivity.CUDA],
+                record_shapes=False,
+            ) as prof:
+                loss.backward()
+            print(prof.key_averages().table(
+                sort_by="cuda_time_total", row_limit=25
+            ))
+            args.profile = False
+        else:
+            loss.backward()
         torch.cuda.synchronize(args.device)
 
     for _ in range(args.warmup):
