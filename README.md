@@ -170,6 +170,26 @@ FFNs, residuals, normalizations, projections, and optimizer work. The composed
 implementation is `GDN2(cuDNN) → LoL(GQA-4, local FlashAttention) →
 LoL(GQA-4, local FlashAttention) → FA(cuDNN)`.
 
+Per-layer CUDA-event hooks measure where that training time goes:
+
+| Layer | Forward | Backward | Total | Share of repeat |
+| --- | ---: | ---: | ---: | ---: |
+| GDN2 | 2.96 ms | 3.59 ms | **6.55 ms** | **37.1%** |
+| LoL-1 | 0.84 ms | 2.05 ms | **2.88 ms** | **16.3%** |
+| LoL-2 | 0.84 ms | 2.02 ms | **2.86 ms** | **16.2%** |
+| FA | 0.96 ms | 2.21 ms | **3.17 ms** | **17.9%** |
+| Output/optimizer remainder | — | — | **~2.20 ms** | **~12.5%** |
+
+The percentages are based on the measured **17.66 ms** median step from the
+hook-instrumented run; hooks add a small amount of scheduling overhead, so the
+individual totals do not need to sum exactly to the uninstrumented 17.33 ms
+measurement. GDN2 is the largest single cost, while the two LoL layers together
+consume about **32.5%** and FA about **17.9%**. Reproduce this breakdown with:
+
+```bash
+CUDA_VISIBLE_DEVICES=1 uv run python benchmarks/gdn2_lol_fa_repeat_timed.py
+```
+
 For a width-matched 600M-class comparison (`D=3072`, 48 heads, head dimension
 64), the same B1/S4096 measurements were: cuDNN GDN2 **5.74 ms**, LoL GQA-4
 local attention **3.42 ms**, and latest cuDNN dense FA **1.12 ms**. A
