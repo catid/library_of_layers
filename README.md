@@ -107,6 +107,13 @@ With one KV head and 29 experts, the model is 598.0M parameters and measured
 275 ms per step, still only about 1.03x faster; routed FFN/GEMM work dominates
 the end-to-end result.
 
+The grouped GQA path now uses the low-level Blackwell FlashAttention operator
+for compact K/V tensors, while retaining the public SDPA fallback on CPU and
+for MHA. In a matched B8/S4096 run this reduced fair GQA-2 from **265.1 ms**
+with native `enable_gqa` to **253.8 ms** (about **1.04x**). The gain is small
+end to end because routed GEMMs dominate, but it removes the GQA wrapper from
+the actual strided attention call.
+
 To compare attention head layouts on the packed 128-token windows, run:
 
 ```bash

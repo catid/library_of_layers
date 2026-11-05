@@ -328,9 +328,17 @@ class LoLWindow(VanillaGPTNeo):
         q = q.transpose(1, 2)
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
-        y = F.scaled_dot_product_attention(
-            q, k, v, is_causal=True, enable_gqa=KV != H,
-        ).transpose(1, 2).contiguous().view(N, D)
+        if KV != H and q.device.type == "cuda":
+            # Blackwell's low-level FlashAttention operator accepts compact
+            # GQA K/V tensors directly, avoiding the enable_gqa wrapper.
+            y, *_ = torch.ops.aten._scaled_dot_product_flash_attention.default(
+                q, k, v, 0.0, True, False,
+            )
+        else:
+            y = F.scaled_dot_product_attention(
+                q, k, v, is_causal=True, enable_gqa=KV != H,
+            )
+        y = y.transpose(1, 2).contiguous().view(N, D)
         x1 = xs + _grouped_mm(
             y, weights["proj"], offsets=offsets
         )
