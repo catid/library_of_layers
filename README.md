@@ -155,6 +155,14 @@ The GDN2 measurement uses the machine-local GDN2/cuDNN benchmark because that
 implementation is not yet part of this LoL repository; its environment must
 include the cuDNN 1.32 package and the CUTLASS DSL extension.
 
+For a width-matched 600M-class comparison (`D=3072`, 48 heads, head dimension
+64), the same B1/S4096 measurements were: cuDNN GDN2 **5.74 ms**, LoL GQA-4
+local attention **3.42 ms**, and latest cuDNN dense FA **1.12 ms**. A
+width-matched `GDN2 → LoL → LoL → FA` repeat is therefore approximately
+**13.69 ms** of core work, or **3.42 ms per layer averaged over the group**.
+This is the more conservative 600M-width estimate; the D=1280 table above is
+useful for the current LoL implementation's actual hidden size.
+
 The 600M-class grouped shifted-window path can be measured on one GPU with:
 
 ```bash
