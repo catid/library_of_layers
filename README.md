@@ -71,6 +71,90 @@ export CHECKPOINT_sudoku_lol=/path/to/checkpoint.pt
 
 ## Strided-attention benchmarks
 
+### Context-length scaling: LoL, SWA, and full FlashAttention
+
+For a fixed local width `w=128`, LoL shifted-window attention and standard
+sliding-window attention (SWA) both scale linearly with context length `S`:
+each token participates in a bounded local interaction. Full FlashAttention
+has no sparsity and scales quadratically, so doubling context roughly doubles
+the work for LoL/SWA but quadruples the attention interaction count for full
+attention. The crossover becomes more pronounced at 8k and 16k context even
+when full FlashAttention remains the fastest dense kernel at short context.
+
+LoL and SWA do not have identical work. LoL partitions each depth into
+non-overlapping fixed windows and shifts the partition at later depths. SWA
+uses overlapping trailing windows at every layer. For the same causal width,
+the nominal per-token interaction count is similar, but LoL avoids repeatedly
+materializing overlapping windows and gets a regular packed shape that maps
+well to FlashAttention. Shifts provide cross-window communication over depth;
+SWA provides it immediately through the trailing neighborhood. LoL therefore
+usually has the lower kernel constant, while SWA has the simpler connectivity
+semantics and is often easier to implement with a standard local-attention
+kernel.
+
+The packed kernel benchmark can measure LoL's attention work at several
+contexts by scaling the packed window count from the validated 4k shape:
+
+```bash
+for s in 4096 8192 16384; do
+  CUDA_VISIBLE_DEVICES=1 uv run python benchmarks/strided_attention_compare.py \
+    --mode gqa --kv-heads 2 --fused-qkv --native-rms --compile \
+    --sdpa-backend flash --windows $((264 * s / 4096)) \
+    --warmup 8 --steps 20
+done
+```
+
+Those measurements are attention-block timings, not full-model training
+times. The validated 4k point is **1.264 ms** for GQA-2, versus **3.58 ms**
+for the original packed MHA baseline. The full B8/S4096 LoL step is **255.1
+ms** because routed GEMMs and dispatch dominate outside attention. A fair SWA
+comparison should use the same hidden size, head layout, local width, number
+of layers, causal mask, and forward/backward measurement; comparing LoL's
+packed windows with a dense full-context SWA implementation would conflate
+the attention pattern with kernel and packing overhead.
+
+### GDN2 → LoL → LoL → FA layer schedule
+
+We also measured the proposed four-layer schedule at B1/S4096 on the GB300,
+using D=1280, BF16, forward plus backward, and eight timed steps after warmup.
+The GDN2 reference is the available cuDNN 1.32 Frost implementation; its
+Triton backend is included as a cross-check. The LoL and FA figures are the
+attention-core benchmark at the same hidden size and sequence length.
+
+| Layer/core | Backend and shape | Median step |
+| --- | --- | ---: |
+| GDN2 | cuDNN 1.32 Frost, 20 heads, chunk size 64 | **5.31 ms** |
+| GDN2 | Triton, 20 heads, chunk size 64 | **5.61 ms** |
+| LoL local attention | GQA-2, 264 packed 128-token windows | **0.836 ms** |
+| Dense FA | latest cuDNN SDPA, 4096-token causal sequence | **0.839 ms** |
+| Dense FA | PyTorch FlashAttention backend, same shape | **1.07 ms** |
+
+These are not full transformer-layer timings: the LoL and FA entries isolate
+the attention core, whereas GDN2 includes its recurrent state update,
+projections, gates, normalization, and output projection. On this basis, one
+`GDN2 → LoL → LoL → FA` group is approximately **7.82 ms** of measured core
+work (5.31 + 0.836 + 0.836 + 0.839), or about **1.96 ms per layer** when
+amortized over four layers. The schedule therefore spends most of its layer
+budget on GDN2, while LoL and cuDNN FA are each roughly six times cheaper per
+core invocation. GDN2 is the long-range state carrier; LoL supplies cheap
+shifted local processing; FA provides periodic exact global interaction.
+
+To reproduce the LoL and FA measurements:
+
+```bash
+CUDA_VISIBLE_DEVICES=1 uv run python benchmarks/strided_attention_compare.py \
+  --mode gqa --kv-heads 2 --fused-qkv --native-rms --compile \
+  --sdpa-backend flash --windows 264 --window 128 --warmup 8 --steps 20
+
+CUDA_VISIBLE_DEVICES=1 uv run python benchmarks/strided_attention_compare.py \
+  --mode mha --fused-qkv --native-rms --compile \
+  --sdpa-backend cudnn --windows 1 --window 4096 --warmup 8 --steps 20
+```
+
+The GDN2 measurement uses the machine-local GDN2/cuDNN benchmark because that
+implementation is not yet part of this LoL repository; its environment must
+include the cuDNN 1.32 package and the CUTLASS DSL extension.
+
 The 600M-class grouped shifted-window path can be measured on one GPU with:
 
 ```bash
