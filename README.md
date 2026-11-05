@@ -164,7 +164,8 @@ CUDA_VISIBLE_DEVICES=1 uv run python benchmarks/gdn2_lol_fa_repeat.py
 ```
 
 At B1/S4096, BF16, AdamW forward plus backward, and five timed steps after two
-warmups, the actual repeat measured **17.33 ms** (236.4k tokens/s). This is
+warmups, the actual repeat measured **17.33 ms** (236.4k tokens/s) with the
+reference GDN2 path. This is
 higher than the 13.69 ms sum of isolated core timings because it includes four
 FFNs, residuals, normalizations, projections, and optimizer work. The composed
 implementation is `GDN2(cuDNN) → LoL(GQA-4, local FlashAttention) →
@@ -189,6 +190,14 @@ consume about **32.5%** and FA about **17.9%**. Reproduce this breakdown with:
 ```bash
 CUDA_VISIBLE_DEVICES=1 uv run python benchmarks/gdn2_lol_fa_repeat_timed.py
 ```
+
+The benchmark now defaults to the optimized `catid/gdn2` checkout at commit
+`11d9f76`, with fused GDN2 projections and recompute disabled. On the same
+machine this configuration measured **17.38 ms** and produced the following
+shares: GDN2 **36.3%**, LoL-1 **16.6%**, LoL-2 **16.5%**, FA **18.3%**, and
+the remainder **~12.3%**. That is about **1.7% faster** than the reference
+GDN2 configuration; the improvement comes from GDN2 forward/projection work,
+while its backward remains the largest part of that layer.
 
 For a width-matched 600M-class comparison (`D=3072`, 48 heads, head dimension
 64), the same B1/S4096 measurements were: cuDNN GDN2 **5.74 ms**, LoL GQA-4

@@ -8,7 +8,15 @@ _repo_root = Path(os.environ.get("GDN2_ROOT", "/home/catid"))
 _fla_root = Path(os.environ.get("FLA_ROOT", "/home/catid/gdn2-gb300/flash-linear-attention"))
 _cudnn_root = Path(os.environ.get("CUDNN_ROOT", "/home/catid/cudnn132"))
 sys.path[:0] = [str(_repo_root), str(_fla_root), str(_cudnn_root), str(_cudnn_root / "nvidia_cutlass_dsl/dsl_packages")]
-from gdn2bench.gdn2 import GatedDeltaNet2
+# Prefer the user's optimized GDN2 checkout; fall back to the machine reference.
+_gdn2_root = Path(os.environ.get("GDN2_ROOT", "/home/catid/gdn2"))
+if (_gdn2_root / "lit_gpt/gdn2.py").exists():
+ import types
+ _lit = types.ModuleType("lit_gpt"); _lit.__path__ = [str(_gdn2_root / "lit_gpt")]
+ sys.modules.setdefault("lit_gpt", _lit)
+ from lit_gpt.gdn2 import GatedDeltaNet2
+else:
+ from gdn2bench.gdn2 import GatedDeltaNet2
 D=3072; H=48; KV=4; HD=64; W=128; FF=12000; S=4096; B=1
 class FFN(nn.Module):
  def __init__(self):
@@ -17,7 +25,7 @@ class FFN(nn.Module):
   z=self.g(self.n(x)); return x+self.d(F.silu(z[...,:FF])*z[...,FF:])
 class G(nn.Module):
  def __init__(self):
-  super().__init__(); self.n=nn.RMSNorm(D,eps=1e-5); self.m=GatedDeltaNet2(hidden_size=D,expand_v=2,head_dim=64,num_heads=H,mode='chunk',use_short_conv=False,backend='cudnn').to(dtype=torch.bfloat16); self.f=FFN()
+  super().__init__(); self.n=nn.RMSNorm(D,eps=1e-5); self.m=GatedDeltaNet2(hidden_size=D,expand_v=2,head_dim=64,num_heads=H,mode='chunk',use_short_conv=False,backend='cudnn',fused_projections=True,disable_recompute=True).to(dtype=torch.bfloat16); self.f=FFN()
  def forward(self,x): return self.f(x+self.m(self.n(x))[0])
 class A(nn.Module):
  def __init__(self,local):
